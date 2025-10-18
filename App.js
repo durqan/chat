@@ -1,16 +1,17 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React from 'react';
 import {
-    View,
-    Text,
-    TextInput,
-    TouchableOpacity,
     FlatList,
     KeyboardAvoidingView,
     Platform,
     Alert,
 } from 'react-native';
-import { Icon, Card, ListItem, Avatar } from 'react-native-elements';
-import io from 'socket.io-client';
+
+import { SocketService } from './services/SocketService';
+import { ChatHeader } from './components/ChatHeader';
+import { MessageBubble } from './components/MessageBubble';
+import { MessageInput } from './components/MessageInput';
+import { ConnectionStatus } from './components/ConnectionStatus';
+import { ChatStyles } from './styles/ChatStyles';
 
 // 🔧 НАСТРОЙТЕ ЭТИ АДРЕСА!
 const EXTERNAL_IP = '77.222.52.61';
@@ -21,101 +22,90 @@ const SERVER_URLS = [
     `http://${INTERNAL_IP}:3000`,
 ];
 
-const App = () => {
-    const [messages, setMessages] = useState([]);
-    const [inputText, setInputText] = useState('');
-    const [socket, setSocket] = useState(null);
-    const [isConnected, setIsConnected] = useState(false);
-    const [currentUrl, setCurrentUrl] = useState('');
-    const [connectionStatus, setConnectionStatus] = useState('Поиск сервера...');
-    const [myUserId, setMyUserId] = useState(null);
+class App extends React.Component {
+    constructor(props) {
+        super(props);
 
-    const flatListRef = useRef(null);
-
-    useEffect(() => {
-        connectToServer(0);
-        return () => {
-            if (socket) {
-                socket.disconnect();
-            }
+        this.state = {
+            messages: [],
+            isConnected: false,
+            socketId: null,
+            connectionStatus: 'Поиск сервера...'
         };
-    }, []);
 
-    const connectToServer = (urlIndex = 0) => {
-        if (urlIndex >= SERVER_URLS.length) {
-            setConnectionStatus('Сервер не найден');
-            Alert.alert('Ошибка подключения', 'Не удалось подключиться к серверу');
-            return;
-        }
+        this.socketService = new SocketService();
+        this.flatListRef = React.createRef();
+    }
 
-        const url = SERVER_URLS[urlIndex];
-        setCurrentUrl(url);
-        setConnectionStatus(`Подключение к ${url}...`);
+    componentDidMount() {
+        this.setupSocketListeners();
+        this.socketService.initialize(SERVER_URLS);
+    }
 
-        const newSocket = io(url, {
-            transports: ['polling', 'websocket'],
-            timeout: 8000,
-            forceNew: true,
-            reconnection: false
+    componentWillUnmount() {
+        this.socketService.disconnect();
+    }
+
+    setupSocketListeners() {
+        this.socketService.onMessage(this.handleNewMessage.bind(this));
+        this.socketService.onConnectionChange(this.handleConnectionChange.bind(this));
+        this.socketService.onHistoryReceived(this.handleHistoryReceived.bind(this));
+        this.socketService.onChatCleared(this.handleChatCleared.bind(this));
+    }
+
+    handleNewMessage(message) {
+        console.log('=== NEW MESSAGE ===');
+        console.log('Message userId:', message.userId);
+        console.log('Current socketId:', this.state.socketId);
+        console.log('Message text:', message.text);
+
+        this.setState(prevState => ({
+            messages: [...prevState.messages, message]
+        }), () => {
+            setTimeout(() => {
+                this.flatListRef.current?.scrollToEnd({ animated: true });
+            }, 100);
+        });
+    }
+
+    handleConnectionChange(isConnected, status) {
+        const connectionInfo = this.socketService.getConnectionInfo();
+
+        console.log('=== CONNECTION CHANGE ===');
+        console.log('isConnected:', isConnected);
+        console.log('socketId:', connectionInfo.socketId);
+        console.log('status:', status);
+
+        this.setState({
+            isConnected,
+            socketId: connectionInfo.socketId,
+            connectionStatus: status
+        });
+    }
+
+    handleHistoryReceived(messages) {
+        console.log('=== MESSAGE HISTORY ===');
+        console.log('Received', messages.length, 'messages');
+        messages.forEach((msg, index) => {
+            console.log(`Message ${index}: userId=${msg.userId}, text=${msg.text}`);
         });
 
-        newSocket.on('connect', () => {
-            setIsConnected(true);
-            setConnectionStatus('Подключено ✓');
-            setMyUserId(newSocket.id);
-        });
+        this.setState({ messages });
+    }
 
-        newSocket.on('disconnect', (reason) => {
-            setIsConnected(false);
-            setConnectionStatus('Отключено: ' + reason);
-        });
+    handleChatCleared() {
+        this.setState({ messages: [] });
+        Alert.alert('Чат очищен', 'Все сообщения были удалены');
+    }
 
-        newSocket.on('connect_error', (error) => {
-            setIsConnected(false);
-            setConnectionStatus(`Ошибка: ${error.message}`);
-            setTimeout(() => connectToServer(urlIndex + 1), 1000);
-        });
-
-        newSocket.on('message_history', (data) => {
-            setMessages(data.messages || []);
-        });
-
-        newSocket.on('chat_message', (data) => {
-            setMessages(prev => {
-                const newMessages = [...prev, data.message];
-                setTimeout(() => {
-                    flatListRef.current?.scrollToEnd({ animated: true });
-                }, 100);
-                return newMessages;
-            });
-        });
-
-        newSocket.on('chat_cleared', () => {
-            setMessages([]);
-            Alert.alert('Чат очищен', 'Все сообщения были удалены');
-        });
-
-        setSocket(newSocket);
-
-        setTimeout(() => {
-            if (!newSocket.connected) {
-                newSocket.disconnect();
-            }
-        }, 8000);
-    };
-
-    const sendMessage = () => {
-        if (inputText.trim() === '' || !isConnected || !socket) {
+    handleSendMessage = (text) => {
+        const success = this.socketService.sendMessage(text);
+        if (!success) {
             Alert.alert('Ошибка', 'Нет подключения к серверу');
-            return;
         }
-
-        const messageData = { text: inputText.trim() };
-        socket.emit('chat_message', messageData);
-        setInputText('');
     };
 
-    const clearChat = () => {
+    handleClearChat = () => {
         Alert.alert(
             'Очистить историю',
             'Вы уверены, что хотите удалить все сообщения?',
@@ -125,207 +115,81 @@ const App = () => {
                     text: 'Очистить',
                     style: 'destructive',
                     onPress: () => {
-                        if (socket && isConnected) {
-                            socket.emit('clear_chat');
-                        }
+                        this.socketService.clearChat();
                     },
                 },
             ]
         );
     };
 
-    const retryConnection = () => {
-        if (socket) socket.disconnect();
-        setIsConnected(false);
-        setConnectionStatus('Переподключение...');
-        setMessages([]);
-        setMyUserId(null);
-        setTimeout(() => connectToServer(0), 500);
+    handleRetryConnection = () => {
+        this.socketService.retryConnection();
     };
 
-    const initiateVideoCall = () => {
-        Alert.alert('Видеозвонок', 'Для видеозвонков необходимо создать development build приложения');
-    };
+    renderMessage = ({ item, index }) => {
+        console.log(`Rendering message ${index}:`, {
+            messageId: item.id,
+            messageUserId: item.userId,
+            currentSocketId: this.state.socketId,
+            text: item.text
+        });
 
-    const formatTime = (timestamp) => {
-        const date = new Date(timestamp);
-        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    };
-
-    const renderMessage = ({ item }) => {
-        const isUser = socket && item.userId && item.userId.includes(socket.id);
-
-        if (isUser) {
-            // Мои сообщения - справа
-            return (
-                <View style={{ flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'flex-end', marginVertical: 4, paddingHorizontal: 8 }}>
-                    <View style={{ backgroundColor: '#2B5278', maxWidth: '75%', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 18, borderBottomRightRadius: 4, marginRight: 8 }}>
-                        <Text style={{ color: 'white', fontSize: 16 }}>{item.text}</Text>
-                        <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 11, marginTop: 2, textAlign: 'right' }}>
-                            {formatTime(item.timestamp)}
-                        </Text>
-                    </View>
-                    <Avatar
-                        rounded
-                        title="Я"
-                        size="small"
-                        containerStyle={{ backgroundColor: '#2B5278' }}
-                    />
-                </View>
-            );
-        } else {
-            // Чужие сообщения - слева
-            return (
-                <View style={{ flexDirection: 'row', justifyContent: 'flex-start', alignItems: 'flex-end', marginVertical: 4, paddingHorizontal: 8 }}>
-                    <Avatar
-                        rounded
-                        title={item.userName ? item.userName.charAt(0).toUpperCase() : 'U'}
-                        size="small"
-                        containerStyle={{ backgroundColor: '#2F89FC', marginRight: 8 }}
-                    />
-                    <View style={{ backgroundColor: '#182533', maxWidth: '75%', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 18, borderBottomLeftRadius: 4 }}>
-                        <Text style={{ color: '#2F89FC', fontSize: 12, fontWeight: 'bold', marginBottom: 2 }}>
-                            {item.userName || 'Аноним'}
-                        </Text>
-                        <Text style={{ color: 'white', fontSize: 16 }}>{item.text}</Text>
-                        <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 11, marginTop: 2, textAlign: 'right' }}>
-                            {formatTime(item.timestamp)}
-                        </Text>
-                    </View>
-                </View>
-            );
-        }
-    };
-
-    return (
-        <KeyboardAvoidingView
-            style={{ flex: 1, backgroundColor: '#0E1621' }}
-            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-            keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
-        >
-            {/* Header */}
-            <View style={{
-                flexDirection: 'row',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                paddingHorizontal: 16,
-                paddingTop: Platform.OS === 'ios' ? 50 : 10,
-                paddingBottom: 10,
-                backgroundColor: '#1E2C3A',
-                borderBottomWidth: 1,
-                borderBottomColor: '#16202B'
-            }}>
-                <View style={{ flex: 1 }}>
-                    <Text style={{ color: 'white', fontSize: 16, fontWeight: 'bold' }}>🌐 Ubuntu Чат</Text>
-                    <Text style={{
-                        color: isConnected ? '#4CAF50' : '#FF3B30',
-                        fontSize: 12,
-                        marginTop: 2
-                    }}>
-                        {connectionStatus}
-                    </Text>
-                    <Text style={{ color: '#8E8E93', fontSize: 10, marginTop: 2 }}>
-                        {myUserId ? `ID: ${myUserId.substring(0, 8)}...` : currentUrl}
-                    </Text>
-                </View>
-                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                    {isConnected && (
-                        <TouchableOpacity onPress={initiateVideoCall} style={{ marginRight: 15, padding: 5 }}>
-                            <Icon name="videocam" type="material" color="#2F89FC" size={20} />
-                        </TouchableOpacity>
-                    )}
-                    <TouchableOpacity onPress={retryConnection} style={{ marginRight: 15, padding: 5 }}>
-                        <Icon name="refresh" type="material" color="#2F89FC" size={20} />
-                    </TouchableOpacity>
-                    <TouchableOpacity onPress={clearChat} style={{ padding: 5 }}>
-                        <Icon name="delete" type="material" color="#FF3B30" size={20} />
-                    </TouchableOpacity>
-                </View>
-            </View>
-
-            {/* Сообщения */}
-            <FlatList
-                ref={flatListRef}
-                data={messages}
-                renderItem={renderMessage}
-                keyExtractor={(item) => item.id}
-                style={{ flex: 1, backgroundColor: '#0E1621' }}
-                contentContainerStyle={{ paddingVertical: 16 }}
-                onContentSizeChange={() => flatListRef.current?.scrollToEnd()}
-                ListEmptyComponent={
-                    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 40 }}>
-                        <Text style={{ color: 'white', fontSize: 18, fontWeight: 'bold', textAlign: 'center', marginBottom: 8 }}>
-                            {isConnected ? 'Сообщений пока нет' : 'Нет подключения к серверу'}
-                        </Text>
-                        <Text style={{ color: '#8E8E93', fontSize: 14, textAlign: 'center', lineHeight: 20, marginBottom: 20 }}>
-                            {isConnected ? 'Отправьте первое сообщение!' : 'Проверьте настройки сети и сервер'}
-                        </Text>
-                        {!isConnected && (
-                            <TouchableOpacity
-                                onPress={retryConnection}
-                                style={{ backgroundColor: '#2F89FC', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 20 }}
-                            >
-                                <Text style={{ color: 'white', fontSize: 16, fontWeight: 'bold' }}>
-                                    Повторить подключение
-                                </Text>
-                            </TouchableOpacity>
-                        )}
-                    </View>
-                }
-                showsVerticalScrollIndicator={false}
+        return (
+            <MessageBubble
+                message={item}
+                currentUserId={this.state.socketId}
             />
+        );
+    };
 
-            {/* Поле ввода */}
-            <View style={{
-                flexDirection: 'row',
-                alignItems: 'flex-end',
-                paddingHorizontal: 12,
-                paddingVertical: 8,
-                backgroundColor: '#1E2C3A',
-                borderTopWidth: 1,
-                borderTopColor: '#16202B'
-            }}>
-                <TextInput
-                    style={{
-                        flex: 1,
-                        backgroundColor: '#1E2C3A',
-                        borderWidth: 1,
-                        borderColor: isConnected ? '#2F89FC' : '#666',
-                        borderRadius: 20,
-                        paddingHorizontal: 16,
-                        paddingVertical: 10,
-                        maxHeight: 100,
-                        fontSize: 16,
-                        color: isConnected ? 'white' : '#666',
-                        marginHorizontal: 8,
-                    }}
-                    value={inputText}
-                    onChangeText={setInputText}
-                    placeholder={isConnected ? "Введите сообщение..." : "Ожидание подключения..."}
-                    placeholderTextColor="#8E8E93"
-                    multiline
-                    maxLength={500}
-                    onSubmitEditing={sendMessage}
-                    returnKeyType="send"
-                    editable={isConnected}
+    getConnectionInfo() {
+        return {
+            isConnected: this.state.isConnected,
+            status: this.state.connectionStatus,
+            currentUrl: '',
+            socketId: this.state.socketId
+        };
+    }
+
+    render() {
+        const { messages, isConnected } = this.state;
+
+        return (
+            <KeyboardAvoidingView
+                style={ChatStyles.container}
+                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+            >
+                <ChatHeader
+                    connectionInfo={this.getConnectionInfo()}
+                    onRetry={this.handleRetryConnection}
+                    onClear={this.handleClearChat}
                 />
-                <TouchableOpacity
-                    style={{
-                        width: 40,
-                        height: 40,
-                        borderRadius: 20,
-                        backgroundColor: isConnected ? '#2F89FC' : '#666',
-                        justifyContent: 'center',
-                        alignItems: 'center',
-                    }}
-                    onPress={sendMessage}
-                    disabled={!isConnected}
-                >
-                    <Icon name="send" type="material" color="white" size={18} />
-                </TouchableOpacity>
-            </View>
-        </KeyboardAvoidingView>
-    );
-};
+
+                <FlatList
+                    ref={this.flatListRef}
+                    data={messages}
+                    renderItem={this.renderMessage}
+                    keyExtractor={(item) => item.id}
+                    style={{ flex: 1, backgroundColor: '#FFFFFF' }}
+                    contentContainerStyle={{ paddingVertical: 16 }}
+                    onContentSizeChange={() => this.flatListRef.current?.scrollToEnd()}
+                    ListEmptyComponent={
+                        <ConnectionStatus
+                            isConnected={isConnected}
+                            onRetry={this.handleRetryConnection}
+                        />
+                    }
+                    showsVerticalScrollIndicator={false}
+                />
+
+                <MessageInput
+                    isConnected={isConnected}
+                    onSend={this.handleSendMessage}
+                />
+            </KeyboardAvoidingView>
+        );
+    }
+}
 
 export default App;
