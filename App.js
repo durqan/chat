@@ -11,6 +11,13 @@ import {
     Alert,
 } from 'react-native';
 import io from 'socket.io-client';
+import {
+    RTCPeerConnection,
+    RTCSessionDescription,
+    RTCIceCandidate,
+    mediaDevices,
+    RTCView,
+} from 'react-native-webrtc';
 
 // 🔧 НАСТРОЙТЕ ЭТИ АДРЕСА!
 const EXTERNAL_IP = '77.222.52.61'; // Ваш внешний IP
@@ -32,15 +39,11 @@ const App = () => {
     // Состояния для видеозвонка
     const [isInCall, setIsInCall] = useState(false);
     const [isCallActive, setIsCallActive] = useState(false);
-    const [hasLocalStream, setHasLocalStream] = useState(false);
-    const [hasRemoteStream, setHasRemoteStream] = useState(false);
+    const [localStream, setLocalStream] = useState(null);
+    const [remoteStream, setRemoteStream] = useState(null);
     const [callStatus, setCallStatus] = useState('');
 
     const flatListRef = useRef(null);
-    const localVideoRef = useRef(null);
-    const remoteVideoRef = useRef(null);
-    const localStreamRef = useRef(null);
-    const remoteStreamRef = useRef(null);
     const peerConnectionRef = useRef(null);
 
     useEffect(() => {
@@ -50,7 +53,6 @@ const App = () => {
             if (socket) {
                 socket.disconnect();
             }
-            // Очистка видеопотоков при размонтировании
             cleanupVideoCall();
         };
     }, []);
@@ -83,7 +85,6 @@ const App = () => {
             setIsConnected(true);
             setConnectionStatus('Подключено ✓');
 
-            // Инициализация обработчиков видеозвонков
             initializeVideoCallHandlers(newSocket);
         });
 
@@ -99,7 +100,6 @@ const App = () => {
             setIsConnected(false);
             setConnectionStatus(`Ошибка: ${error.message}`);
 
-            // Пробуем следующий URL
             setTimeout(() => {
                 console.log('🔄 Пробуем следующий URL...');
                 connectToServer(urlIndex + 1);
@@ -130,7 +130,6 @@ const App = () => {
 
         setSocket(newSocket);
 
-        // Таймаут подключения
         setTimeout(() => {
             if (!newSocket.connected) {
                 console.log('⏰ Таймаут подключения к', url);
@@ -142,12 +141,11 @@ const App = () => {
     // ==================== ВИДЕОЗВОНОК ====================
 
     const initializeVideoCallHandlers = (socket) => {
-        // Входящий звонок
         socket.on('incoming_call', (data) => {
-            console.log('📞 Входящий звонок от:', data.from);
+            console.log('📞 Входящий звонок от:', data.fromName);
             Alert.alert(
                 'Входящий видеозвонок',
-                `Пользователь ${data.from} звонит вам`,
+                `Пользователь ${data.fromName} звонит вам`,
                 [
                     {
                         text: 'Отклонить',
@@ -166,14 +164,12 @@ const App = () => {
             );
         });
 
-        // Звонок принят
         socket.on('call_accepted', async (data) => {
             console.log('✅ Звонок принят');
             setCallStatus('Соединение...');
             await startCall();
         });
 
-        // Звонок отклонен
         socket.on('call_rejected', (data) => {
             console.log('❌ Звонок отклонен');
             setCallStatus('Звонок отклонен');
@@ -181,35 +177,49 @@ const App = () => {
             cleanupVideoCall();
         });
 
-        // Получение ICE кандидата
         socket.on('ice_candidate', async (data) => {
-            if (peerConnectionRef.current) {
+            if (peerConnectionRef.current && data.candidate) {
                 try {
-                    await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(data.candidate));
+                    await peerConnectionRef.current.addIceCandidate(
+                        new RTCIceCandidate(data.candidate)
+                    );
                 } catch (error) {
                     console.error('Ошибка добавления ICE кандидата:', error);
                 }
             }
         });
 
-        // Получение предложения WebRTC
         socket.on('offer', async (data) => {
             if (peerConnectionRef.current) {
-                await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(data.offer));
-                const answer = await peerConnectionRef.current.createAnswer();
-                await peerConnectionRef.current.setLocalDescription(answer);
-                socket.emit('answer', { answer, to: data.from });
+                try {
+                    await peerConnectionRef.current.setRemoteDescription(
+                        new RTCSessionDescription(data.offer)
+                    );
+                    const answer = await peerConnectionRef.current.createAnswer();
+                    await peerConnectionRef.current.setLocalDescription(answer);
+
+                    socket.emit('answer', {
+                        answer: answer,
+                        to: data.from
+                    });
+                } catch (error) {
+                    console.error('Ошибка обработки offer:', error);
+                }
             }
         });
 
-        // Получение ответа WebRTC
         socket.on('answer', async (data) => {
             if (peerConnectionRef.current) {
-                await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(data.answer));
+                try {
+                    await peerConnectionRef.current.setRemoteDescription(
+                        new RTCSessionDescription(data.answer)
+                    );
+                } catch (error) {
+                    console.error('Ошибка обработки answer:', error);
+                }
             }
         });
 
-        // Звонок завершен
         socket.on('call_ended', (data) => {
             console.log('📞 Звонок завершен');
             setCallStatus('Звонок завершен');
@@ -228,35 +238,28 @@ const App = () => {
 
         const pc = new RTCPeerConnection(configuration);
 
-        // Обработчик получения удаленного потока
-        pc.ontrack = (event) => {
-            console.log('✅ Получен удаленный видеопоток');
-            setHasRemoteStream(true);
-            remoteStreamRef.current = event.streams[0];
-            if (remoteVideoRef.current) {
-                remoteVideoRef.current.srcObject = event.streams[0];
+        pc.oniceconnectionstatechange = () => {
+            console.log('ICE состояние:', pc.iceConnectionState);
+            if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+                setCallStatus('Соединение установлено');
+                setIsCallActive(true);
+            } else if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
+                setCallStatus('Соединение потеряно');
+                setIsCallActive(false);
             }
         };
 
-        // Обработчик ICE кандидатов
+        pc.ontrack = (event) => {
+            console.log('✅ Получен удаленный видеопоток');
+            setRemoteStream(event.streams[0]);
+        };
+
         pc.onicecandidate = (event) => {
             if (event.candidate && socket) {
                 socket.emit('ice_candidate', {
                     candidate: event.candidate,
-                    to: 'all' // В реальном приложении нужно указывать конкретного пользователя
+                    to: 'all'
                 });
-            }
-        };
-
-        // Обработчик изменения состояния соединения
-        pc.onconnectionstatechange = () => {
-            console.log('Состояние соединения:', pc.connectionState);
-            if (pc.connectionState === 'connected') {
-                setCallStatus('Соединение установлено');
-                setIsCallActive(true);
-            } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
-                setCallStatus('Соединение потеряно');
-                setIsCallActive(false);
             }
         };
 
@@ -265,21 +268,24 @@ const App = () => {
 
     const getLocalStream = async () => {
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({
-                video: true,
-                audio: true
+            console.log('🎥 Запрос доступа к камере...');
+            const stream = await mediaDevices.getUserMedia({
+                video: {
+                    width: 640,
+                    height: 480,
+                    frameRate: 30,
+                    facingMode: 'user',
+                },
+                audio: true,
             });
-            setHasLocalStream(true);
-            localStreamRef.current = stream;
-
-            if (localVideoRef.current) {
-                localVideoRef.current.srcObject = stream;
-            }
-
+            console.log('✅ Доступ к камере получен');
             return stream;
         } catch (error) {
-            console.error('Ошибка получения доступа к камере/микрофону:', error);
-            Alert.alert('Ошибка', 'Не удалось получить доступ к камере и микрофону');
+            console.error('❌ Ошибка доступа к камере:', error);
+            Alert.alert(
+                'Ошибка доступа',
+                'Не удалось получить доступ к камере и микрофону. Проверьте разрешения приложения.'
+            );
             return null;
         }
     };
@@ -295,6 +301,7 @@ const App = () => {
                 return;
             }
 
+            setLocalStream(stream);
             peerConnectionRef.current = initializePeerConnection();
 
             // Добавляем локальные треки в peer connection
@@ -310,58 +317,22 @@ const App = () => {
             if (socket) {
                 socket.emit('offer', {
                     offer,
-                    to: 'all' // В реальном приложении нужно указывать конкретного пользователя
+                    to: 'all'
                 });
             }
 
             setCallStatus('Установка соединения...');
 
         } catch (error) {
-            console.error('Ошибка начала звонка:', error);
+            console.error('❌ Ошибка начала звонка:', error);
             Alert.alert('Ошибка', 'Не удалось начать видеозвонок');
             cleanupVideoCall();
         }
     };
 
     const acceptCall = async (from) => {
+        console.log('✅ Принятие звонка от:', from);
         await startCall();
-    };
-
-    const endCall = () => {
-        if (socket) {
-            socket.emit('end_call', { to: 'all' });
-        }
-        cleanupVideoCall();
-        Alert.alert('Информация', 'Звонок завершен');
-    };
-
-    const cleanupVideoCall = () => {
-        // Останавливаем локальные треки
-        if (localStreamRef.current) {
-            localStreamRef.current.getTracks().forEach(track => track.stop());
-            localStreamRef.current = null;
-        }
-
-        // Закрываем peer connection
-        if (peerConnectionRef.current) {
-            peerConnectionRef.current.close();
-            peerConnectionRef.current = null;
-        }
-
-        // Очищаем видеопотоки
-        if (localVideoRef.current) {
-            localVideoRef.current.srcObject = null;
-        }
-        if (remoteVideoRef.current) {
-            remoteVideoRef.current.srcObject = null;
-        }
-
-        // Сбрасываем состояния
-        setIsInCall(false);
-        setIsCallActive(false);
-        setHasLocalStream(false);
-        setHasRemoteStream(false);
-        setCallStatus('');
     };
 
     const initiateVideoCall = () => {
@@ -386,6 +357,35 @@ const App = () => {
                 }
             ]
         );
+    };
+
+    const endCall = () => {
+        if (socket) {
+            socket.emit('end_call', { to: 'all' });
+        }
+        cleanupVideoCall();
+        Alert.alert('Информация', 'Звонок завершен');
+    };
+
+    const cleanupVideoCall = () => {
+        console.log('🧹 Очистка видеозвонка');
+
+        if (localStream) {
+            localStream.getTracks().forEach(track => {
+                track.stop();
+            });
+            setLocalStream(null);
+        }
+
+        if (peerConnectionRef.current) {
+            peerConnectionRef.current.close();
+            peerConnectionRef.current = null;
+        }
+
+        setRemoteStream(null);
+        setIsInCall(false);
+        setIsCallActive(false);
+        setCallStatus('');
     };
 
     const sendMessage = () => {
@@ -496,7 +496,7 @@ const App = () => {
             {/* Header */}
             <View style={styles.header}>
                 <View style={styles.contactInfo}>
-                    <Text style={styles.contactName}>🌐 Ubuntu Чат</Text>
+                    <Text style={styles.contactName}>🌐 Ubuntu Чат + Видео</Text>
                     <Text style={[styles.contactStatus,
                         { color: isConnected ? '#4CAF50' : '#FF3B30' }]}>
                         {connectionStatus}
@@ -535,13 +535,11 @@ const App = () => {
 
                     <View style={styles.videoGrid}>
                         {/* Удаленное видео */}
-                        {hasRemoteStream ? (
-                            <video
-                                ref={remoteVideoRef}
+                        {remoteStream ? (
+                            <RTCView
+                                streamURL={remoteStream.toURL()}
                                 style={styles.remoteVideo}
-                                autoPlay
-                                playsInline
-                                muted={false}
+                                objectFit={'cover'}
                             />
                         ) : (
                             <View style={styles.videoPlaceholder}>
@@ -552,13 +550,12 @@ const App = () => {
                         )}
 
                         {/* Локальное видео (picture-in-picture) */}
-                        {hasLocalStream && (
-                            <video
-                                ref={localVideoRef}
+                        {localStream && (
+                            <RTCView
+                                streamURL={localStream.toURL()}
                                 style={styles.localVideo}
-                                autoPlay
-                                playsInline
-                                muted={true}
+                                objectFit={'cover'}
+                                mirror={true}
                             />
                         )}
                     </View>
@@ -646,10 +643,6 @@ const styles = StyleSheet.create({
         backgroundColor: '#1E2C3A',
         borderBottomWidth: 1,
         borderBottomColor: '#16202B',
-    },
-    headerLeft: {
-        flexDirection: 'row',
-        alignItems: 'center',
     },
     contactInfo: {
         flexDirection: 'column',
