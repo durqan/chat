@@ -24,12 +24,24 @@ const SERVER_URLS = [
 const App = () => {
     const [messages, setMessages] = useState([]);
     const [inputText, setInputText] = useState('');
-    const [timeLeft, setTimeLeft] = useState(10);
     const [socket, setSocket] = useState(null);
     const [isConnected, setIsConnected] = useState(false);
     const [currentUrl, setCurrentUrl] = useState('');
     const [connectionStatus, setConnectionStatus] = useState('Поиск сервера...');
+
+    // Состояния для видеозвонка
+    const [isInCall, setIsInCall] = useState(false);
+    const [isCallActive, setIsCallActive] = useState(false);
+    const [hasLocalStream, setHasLocalStream] = useState(false);
+    const [hasRemoteStream, setHasRemoteStream] = useState(false);
+    const [callStatus, setCallStatus] = useState('');
+
     const flatListRef = useRef(null);
+    const localVideoRef = useRef(null);
+    const remoteVideoRef = useRef(null);
+    const localStreamRef = useRef(null);
+    const remoteStreamRef = useRef(null);
+    const peerConnectionRef = useRef(null);
 
     useEffect(() => {
         connectToServer(0);
@@ -38,6 +50,8 @@ const App = () => {
             if (socket) {
                 socket.disconnect();
             }
+            // Очистка видеопотоков при размонтировании
+            cleanupVideoCall();
         };
     }, []);
 
@@ -68,12 +82,16 @@ const App = () => {
             console.log('✅ Успешно подключено к:', url);
             setIsConnected(true);
             setConnectionStatus('Подключено ✓');
+
+            // Инициализация обработчиков видеозвонков
+            initializeVideoCallHandlers(newSocket);
         });
 
         newSocket.on('disconnect', (reason) => {
             console.log('❌ Отключено:', reason);
             setIsConnected(false);
             setConnectionStatus('Отключено: ' + reason);
+            cleanupVideoCall();
         });
 
         newSocket.on('connect_error', (error) => {
@@ -121,27 +139,253 @@ const App = () => {
         }, 8000);
     };
 
-    // Таймер самоочистки
-    useEffect(() => {
-        if (!isConnected) return;
+    // ==================== ВИДЕОЗВОНОК ====================
 
-        const timer = setInterval(() => {
-            setTimeLeft((prevTime) => {
-                if (prevTime <= 1) {
-                    clearChatAutomatically();
-                    return 10;
+    const initializeVideoCallHandlers = (socket) => {
+        // Входящий звонок
+        socket.on('incoming_call', (data) => {
+            console.log('📞 Входящий звонок от:', data.from);
+            Alert.alert(
+                'Входящий видеозвонок',
+                `Пользователь ${data.from} звонит вам`,
+                [
+                    {
+                        text: 'Отклонить',
+                        style: 'cancel',
+                        onPress: () => {
+                            socket.emit('reject_call', { to: data.from });
+                        }
+                    },
+                    {
+                        text: 'Принять',
+                        onPress: () => {
+                            acceptCall(data.from);
+                        }
+                    }
+                ]
+            );
+        });
+
+        // Звонок принят
+        socket.on('call_accepted', async (data) => {
+            console.log('✅ Звонок принят');
+            setCallStatus('Соединение...');
+            await startCall();
+        });
+
+        // Звонок отклонен
+        socket.on('call_rejected', (data) => {
+            console.log('❌ Звонок отклонен');
+            setCallStatus('Звонок отклонен');
+            Alert.alert('Информация', 'Звонок был отклонен');
+            cleanupVideoCall();
+        });
+
+        // Получение ICE кандидата
+        socket.on('ice_candidate', async (data) => {
+            if (peerConnectionRef.current) {
+                try {
+                    await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(data.candidate));
+                } catch (error) {
+                    console.error('Ошибка добавления ICE кандидата:', error);
                 }
-                return prevTime - 1;
+            }
+        });
+
+        // Получение предложения WebRTC
+        socket.on('offer', async (data) => {
+            if (peerConnectionRef.current) {
+                await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(data.offer));
+                const answer = await peerConnectionRef.current.createAnswer();
+                await peerConnectionRef.current.setLocalDescription(answer);
+                socket.emit('answer', { answer, to: data.from });
+            }
+        });
+
+        // Получение ответа WebRTC
+        socket.on('answer', async (data) => {
+            if (peerConnectionRef.current) {
+                await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(data.answer));
+            }
+        });
+
+        // Звонок завершен
+        socket.on('call_ended', (data) => {
+            console.log('📞 Звонок завершен');
+            setCallStatus('Звонок завершен');
+            Alert.alert('Информация', 'Собеседник завершил звонок');
+            cleanupVideoCall();
+        });
+    };
+
+    const initializePeerConnection = () => {
+        const configuration = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' }
+            ]
+        };
+
+        const pc = new RTCPeerConnection(configuration);
+
+        // Обработчик получения удаленного потока
+        pc.ontrack = (event) => {
+            console.log('✅ Получен удаленный видеопоток');
+            setHasRemoteStream(true);
+            remoteStreamRef.current = event.streams[0];
+            if (remoteVideoRef.current) {
+                remoteVideoRef.current.srcObject = event.streams[0];
+            }
+        };
+
+        // Обработчик ICE кандидатов
+        pc.onicecandidate = (event) => {
+            if (event.candidate && socket) {
+                socket.emit('ice_candidate', {
+                    candidate: event.candidate,
+                    to: 'all' // В реальном приложении нужно указывать конкретного пользователя
+                });
+            }
+        };
+
+        // Обработчик изменения состояния соединения
+        pc.onconnectionstatechange = () => {
+            console.log('Состояние соединения:', pc.connectionState);
+            if (pc.connectionState === 'connected') {
+                setCallStatus('Соединение установлено');
+                setIsCallActive(true);
+            } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+                setCallStatus('Соединение потеряно');
+                setIsCallActive(false);
+            }
+        };
+
+        return pc;
+    };
+
+    const getLocalStream = async () => {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: true,
+                audio: true
             });
-        }, 1000);
+            setHasLocalStream(true);
+            localStreamRef.current = stream;
 
-        return () => clearInterval(timer);
-    }, [isConnected]);
+            if (localVideoRef.current) {
+                localVideoRef.current.srcObject = stream;
+            }
 
-    const clearChatAutomatically = () => {
-        if (socket && isConnected) {
-            socket.emit('clear_chat');
+            return stream;
+        } catch (error) {
+            console.error('Ошибка получения доступа к камере/микрофону:', error);
+            Alert.alert('Ошибка', 'Не удалось получить доступ к камере и микрофону');
+            return null;
         }
+    };
+
+    const startCall = async () => {
+        try {
+            setIsInCall(true);
+            setCallStatus('Подготовка...');
+
+            const stream = await getLocalStream();
+            if (!stream) {
+                cleanupVideoCall();
+                return;
+            }
+
+            peerConnectionRef.current = initializePeerConnection();
+
+            // Добавляем локальные треки в peer connection
+            stream.getTracks().forEach(track => {
+                peerConnectionRef.current.addTrack(track, stream);
+            });
+
+            // Создаем предложение
+            const offer = await peerConnectionRef.current.createOffer();
+            await peerConnectionRef.current.setLocalDescription(offer);
+
+            // Отправляем предложение через сокет
+            if (socket) {
+                socket.emit('offer', {
+                    offer,
+                    to: 'all' // В реальном приложении нужно указывать конкретного пользователя
+                });
+            }
+
+            setCallStatus('Установка соединения...');
+
+        } catch (error) {
+            console.error('Ошибка начала звонка:', error);
+            Alert.alert('Ошибка', 'Не удалось начать видеозвонок');
+            cleanupVideoCall();
+        }
+    };
+
+    const acceptCall = async (from) => {
+        await startCall();
+    };
+
+    const endCall = () => {
+        if (socket) {
+            socket.emit('end_call', { to: 'all' });
+        }
+        cleanupVideoCall();
+        Alert.alert('Информация', 'Звонок завершен');
+    };
+
+    const cleanupVideoCall = () => {
+        // Останавливаем локальные треки
+        if (localStreamRef.current) {
+            localStreamRef.current.getTracks().forEach(track => track.stop());
+            localStreamRef.current = null;
+        }
+
+        // Закрываем peer connection
+        if (peerConnectionRef.current) {
+            peerConnectionRef.current.close();
+            peerConnectionRef.current = null;
+        }
+
+        // Очищаем видеопотоки
+        if (localVideoRef.current) {
+            localVideoRef.current.srcObject = null;
+        }
+        if (remoteVideoRef.current) {
+            remoteVideoRef.current.srcObject = null;
+        }
+
+        // Сбрасываем состояния
+        setIsInCall(false);
+        setIsCallActive(false);
+        setHasLocalStream(false);
+        setHasRemoteStream(false);
+        setCallStatus('');
+    };
+
+    const initiateVideoCall = () => {
+        if (!isConnected) {
+            Alert.alert('Ошибка', 'Нет подключения к серверу');
+            return;
+        }
+
+        Alert.alert(
+            'Видеозвонок',
+            'Начать видеозвонок со всеми участниками чата?',
+            [
+                { text: 'Отмена', style: 'cancel' },
+                {
+                    text: 'Позвонить',
+                    onPress: () => {
+                        if (socket) {
+                            socket.emit('initiate_call', { to: 'all' });
+                            startCall();
+                        }
+                    }
+                }
+            ]
+        );
     };
 
     const sendMessage = () => {
@@ -158,7 +402,6 @@ const App = () => {
 
         socket.emit('chat_message', messageData);
         setInputText('');
-        setTimeLeft(10);
     };
 
     const clearChat = () => {
@@ -174,7 +417,6 @@ const App = () => {
                         if (socket && isConnected) {
                             socket.emit('clear_chat');
                         }
-                        setTimeLeft(10);
                     },
                 },
             ]
@@ -189,6 +431,7 @@ const App = () => {
         setIsConnected(false);
         setConnectionStatus('Переподключение...');
         setMessages([]);
+        cleanupVideoCall();
 
         setTimeout(() => {
             connectToServer(0);
@@ -263,90 +506,127 @@ const App = () => {
                     </Text>
                 </View>
                 <View style={styles.headerButtons}>
+                    {/* Кнопка видеозвонка */}
+                    {isConnected && (
+                        <TouchableOpacity onPress={initiateVideoCall} style={styles.videoCallButton}>
+                            <Text style={styles.videoCallButtonText}>📹</Text>
+                        </TouchableOpacity>
+                    )}
                     <TouchableOpacity onPress={retryConnection} style={styles.retryButton}>
                         <Text style={styles.retryButtonText}>⟳</Text>
                     </TouchableOpacity>
                     <TouchableOpacity onPress={clearChat}>
-                        <Text style={styles.headerButton}>⋮</Text>
+                        <Text style={styles.headerButton}>🗑️</Text>
                     </TouchableOpacity>
                 </View>
             </View>
 
-            {/* Индикатор таймера */}
-            {isConnected && messages.length > 0 && (
-                <View style={styles.timerContainer}>
-                    <View style={styles.timerBar}>
-                        <View
-                            style={[
-                                styles.timerProgress,
-                                { width: `${(timeLeft / 10) * 100}%` }
-                            ]}
-                        />
+            {/* Видеозвонок */}
+            {isInCall && (
+                <View style={styles.videoCallContainer}>
+                    <View style={styles.videoHeader}>
+                        <Text style={styles.videoHeaderText}>
+                            📹 Видеозвонок {callStatus && `- ${callStatus}`}
+                        </Text>
+                        <TouchableOpacity onPress={endCall} style={styles.endCallButton}>
+                            <Text style={styles.endCallButtonText}>📞</Text>
+                        </TouchableOpacity>
                     </View>
-                    <Text style={styles.timerText}>
-                        Автоочистка через: {timeLeft} сек
-                    </Text>
+
+                    <View style={styles.videoGrid}>
+                        {/* Удаленное видео */}
+                        {hasRemoteStream ? (
+                            <video
+                                ref={remoteVideoRef}
+                                style={styles.remoteVideo}
+                                autoPlay
+                                playsInline
+                                muted={false}
+                            />
+                        ) : (
+                            <View style={styles.videoPlaceholder}>
+                                <Text style={styles.videoPlaceholderText}>
+                                    Ожидание собеседника...
+                                </Text>
+                            </View>
+                        )}
+
+                        {/* Локальное видео (picture-in-picture) */}
+                        {hasLocalStream && (
+                            <video
+                                ref={localVideoRef}
+                                style={styles.localVideo}
+                                autoPlay
+                                playsInline
+                                muted={true}
+                            />
+                        )}
+                    </View>
                 </View>
             )}
 
             {/* Сообщения */}
-            <FlatList
-                ref={flatListRef}
-                data={messages}
-                renderItem={renderMessage}
-                keyExtractor={(item) => item.id}
-                style={styles.messagesList}
-                contentContainerStyle={styles.messagesContent}
-                onContentSizeChange={() => flatListRef.current?.scrollToEnd()}
-                ListEmptyComponent={
-                    <View style={styles.emptyContainer}>
-                        <Text style={styles.emptyText}>
-                            {isConnected ? 'Сообщений пока нет' : 'Нет подключения к серверу'}
-                        </Text>
-                        <Text style={styles.emptySubText}>
-                            {isConnected
-                                ? 'Отправьте первое сообщение!'
-                                : 'Проверьте настройки сети и сервер'
-                            }
-                        </Text>
-                        {!isConnected && (
-                            <TouchableOpacity onPress={retryConnection} style={styles.retryButtonBig}>
-                                <Text style={styles.retryButtonBigText}>Повторить подключение</Text>
-                            </TouchableOpacity>
-                        )}
-                    </View>
-                }
-                showsVerticalScrollIndicator={false}
-            />
+            {!isInCall && (
+                <FlatList
+                    ref={flatListRef}
+                    data={messages}
+                    renderItem={renderMessage}
+                    keyExtractor={(item) => item.id}
+                    style={styles.messagesList}
+                    contentContainerStyle={styles.messagesContent}
+                    onContentSizeChange={() => flatListRef.current?.scrollToEnd()}
+                    ListEmptyComponent={
+                        <View style={styles.emptyContainer}>
+                            <Text style={styles.emptyText}>
+                                {isConnected ? 'Сообщений пока нет' : 'Нет подключения к серверу'}
+                            </Text>
+                            <Text style={styles.emptySubText}>
+                                {isConnected
+                                    ? 'Отправьте первое сообщение!'
+                                    : 'Проверьте настройки сети и сервер'
+                                }
+                            </Text>
+                            {!isConnected && (
+                                <TouchableOpacity onPress={retryConnection} style={styles.retryButtonBig}>
+                                    <Text style={styles.retryButtonBigText}>Повторить подключение</Text>
+                                </TouchableOpacity>
+                            )}
+                        </View>
+                    }
+                    showsVerticalScrollIndicator={false}
+                />
+            )}
 
             {/* Поле ввода */}
-            <View style={styles.inputContainer}>
-                <TextInput
-                    style={[
-                        styles.textInput,
-                        !isConnected && styles.disabledInput
-                    ]}
-                    value={inputText}
-                    onChangeText={setInputText}
-                    placeholder={isConnected ? "Введите сообщение..." : "Ожидание подключения..."}
-                    placeholderTextColor="#8E8E93"
-                    multiline
-                    maxLength={500}
-                    onSubmitEditing={sendMessage}
-                    returnKeyType="send"
-                    editable={isConnected}
-                />
-                <TouchableOpacity
-                    style={[
-                        styles.sendButton,
-                        !isConnected && styles.disabledButton
-                    ]}
-                    onPress={sendMessage}
-                    disabled={!isConnected}
-                >
-                    <Text style={styles.sendButtonText}>➤</Text>
-                </TouchableOpacity>
-            </View>
+            {!isInCall && (
+                <View style={styles.inputContainer}>
+                    <TextInput
+                        style={[
+                            styles.textInput,
+                            !isConnected && styles.disabledInput
+                        ]}
+                        value={inputText}
+                        onChangeText={setInputText}
+                        placeholder={isConnected ? "Введите сообщение..." : "Ожидание подключения..."}
+                        placeholderTextColor="#8E8E93"
+                        multiline
+                        maxLength={500}
+                        onSubmitEditing={sendMessage}
+                        returnKeyType="send"
+                        editable={isConnected}
+                    />
+                    <TouchableOpacity
+                        style={[
+                            styles.sendButton,
+                            !isConnected && styles.disabledButton
+                        ]}
+                        onPress={sendMessage}
+                        disabled={!isConnected}
+                    >
+                        <Text style={styles.sendButtonText}>➤</Text>
+                    </TouchableOpacity>
+                </View>
+            )}
         </KeyboardAvoidingView>
     );
 };
@@ -393,6 +673,14 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
     },
+    videoCallButton: {
+        marginRight: 10,
+        padding: 5,
+    },
+    videoCallButtonText: {
+        color: '#2F89FC',
+        fontSize: 18,
+    },
     retryButton: {
         marginRight: 15,
         padding: 5,
@@ -403,33 +691,68 @@ const styles = StyleSheet.create({
         fontWeight: 'bold',
     },
     headerButton: {
-        color: '#2F89FC',
-        fontSize: 20,
+        color: '#FF3B30',
+        fontSize: 18,
         fontWeight: 'bold',
     },
-    timerContainer: {
-        backgroundColor: '#1A2530',
-        paddingHorizontal: 16,
-        paddingVertical: 8,
-        borderBottomWidth: 1,
-        borderBottomColor: '#16202B',
+    // Стили для видеозвонка
+    videoCallContainer: {
+        flex: 1,
+        backgroundColor: '#000',
     },
-    timerBar: {
-        height: 4,
-        backgroundColor: '#2A3A4A',
-        borderRadius: 2,
-        overflow: 'hidden',
-        marginBottom: 4,
+    videoHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        padding: 16,
+        backgroundColor: '#1E2C3A',
     },
-    timerProgress: {
+    videoHeaderText: {
+        color: 'white',
+        fontSize: 16,
+        fontWeight: 'bold',
+    },
+    endCallButton: {
+        backgroundColor: '#FF3B30',
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    endCallButtonText: {
+        color: 'white',
+        fontSize: 16,
+    },
+    videoGrid: {
+        flex: 1,
+        position: 'relative',
+    },
+    remoteVideo: {
+        width: '100%',
         height: '100%',
-        backgroundColor: '#2F89FC',
-        borderRadius: 2,
+        backgroundColor: '#000',
     },
-    timerText: {
-        color: '#8E8E93',
-        fontSize: 12,
-        textAlign: 'center',
+    localVideo: {
+        position: 'absolute',
+        bottom: 20,
+        right: 20,
+        width: 120,
+        height: 160,
+        backgroundColor: '#000',
+        borderRadius: 8,
+        borderWidth: 2,
+        borderColor: '#2F89FC',
+    },
+    videoPlaceholder: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        backgroundColor: '#000',
+    },
+    videoPlaceholderText: {
+        color: 'white',
+        fontSize: 16,
     },
     messagesList: {
         flex: 1,
