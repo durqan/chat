@@ -193,21 +193,24 @@ const App = () => {
                 styles.messageContainer,
                 isUser ? styles.userContainer : styles.otherContainer
             ]}>
+                {/* Аватар для чужих сообщений (слева) */}
                 {!isUser && (
                     <View style={styles.avatar}>
                         <Text style={styles.avatarText}>
-                            {item.userName ? item.userName.charAt(0) : 'U'}
+                            {item.userName ? item.userName.charAt(0).toUpperCase() : 'U'}
                         </Text>
                     </View>
                 )}
 
+                {/* Баллон сообщения */}
                 <View style={[
                     styles.messageBubble,
                     isUser ? styles.userBubble : styles.otherBubble
                 ]}>
+                    {/* Имя пользователя для чужих сообщений */}
                     {!isUser && (
                         <Text style={styles.userNameText}>
-                            {item.userName || 'Другой пользователь'}
+                            {item.userName || 'Аноним'}
                         </Text>
                     )}
                     <Text style={styles.messageText}>
@@ -218,6 +221,7 @@ const App = () => {
                     </Text>
                 </View>
 
+                {/* Аватар для своих сообщений (справа) */}
                 {isUser && (
                     <View style={[styles.avatar, styles.userAvatar]}>
                         <Text style={styles.avatarText}>Я</Text>
@@ -323,7 +327,6 @@ const App = () => {
     );
 };
 
-// Стили остаются такими же как в предыдущем коде
 const styles = StyleSheet.create({
     container: {
         flex: 1,
@@ -400,25 +403,27 @@ const styles = StyleSheet.create({
         paddingHorizontal: 8,
     },
     userContainer: {
-        justifyContent: 'flex-end',
+        justifyContent: 'flex-end', // Свои сообщения справа
     },
     otherContainer: {
-        justifyContent: 'flex-start',
+        justifyContent: 'flex-start', // Чужие сообщения слева
     },
     messageBubble: {
-        maxWidth: '70%',
+        maxWidth: '75%',
         paddingHorizontal: 12,
         paddingVertical: 8,
         borderRadius: 18,
         marginHorizontal: 4,
     },
     userBubble: {
-        backgroundColor: '#2B5278',
+        backgroundColor: '#2B5278', // Синий для своих сообщений
         borderBottomRightRadius: 4,
+        marginLeft: 'auto', // Толкает сообщение вправо
     },
     otherBubble: {
-        backgroundColor: '#182533',
+        backgroundColor: '#182533', // Темный для чужих сообщений
         borderBottomLeftRadius: 4,
+        marginRight: 'auto', // Толкает сообщение влево
     },
     messageText: {
         color: 'white',
@@ -447,7 +452,7 @@ const styles = StyleSheet.create({
         marginHorizontal: 4,
     },
     userAvatar: {
-        backgroundColor: '#2B5278',
+        backgroundColor: '#2B5278', // Темно-синий для своего аватара
     },
     avatarText: {
         color: 'white',
