@@ -28,6 +28,7 @@ const App = () => {
     const [isConnected, setIsConnected] = useState(false);
     const [currentUrl, setCurrentUrl] = useState('');
     const [connectionStatus, setConnectionStatus] = useState('Поиск сервера...');
+    const [myUserId, setMyUserId] = useState(null);
 
     const flatListRef = useRef(null);
 
@@ -68,6 +69,10 @@ const App = () => {
             console.log('✅ Успешно подключено к:', url);
             setIsConnected(true);
             setConnectionStatus('Подключено ✓');
+
+            // Сохраняем ID сокета для идентификации своих сообщений
+            setMyUserId(newSocket.id);
+            console.log('🆔 Мой socket ID:', newSocket.id);
         });
 
         newSocket.on('disconnect', (reason) => {
@@ -94,6 +99,9 @@ const App = () => {
 
         newSocket.on('chat_message', (data) => {
             console.log('📨 Новое сообщение:', data.message.text);
+            console.log('🆔 ID отправителя:', data.message.userId);
+            console.log('🆔 Мой ID:', myUserId);
+
             setMessages(prev => {
                 const newMessages = [...prev, data.message];
                 setTimeout(() => {
@@ -162,6 +170,7 @@ const App = () => {
         setIsConnected(false);
         setConnectionStatus('Переподключение...');
         setMessages([]);
+        setMyUserId(null);
 
         setTimeout(() => {
             connectToServer(0);
@@ -186,45 +195,57 @@ const App = () => {
     };
 
     const renderMessage = ({ item }) => {
-        const isUser = item.userId && socket && item.userId.includes(socket.id);
+        // Правильное определение своих сообщений
+        const isUser = socket && item.userId && item.userId.includes(socket.id);
+
+        console.log('💬 Рендер сообщения:', {
+            text: item.text,
+            userId: item.userId,
+            mySocketId: socket?.id,
+            isUser: isUser
+        });
 
         return (
             <View style={[
-                styles.messageContainer,
-                isUser ? styles.userContainer : styles.otherContainer
+                styles.messageRow,
+                isUser && styles.userMessageRow
             ]}>
-                {/* Аватар для чужих сообщений (слева) */}
+                {/* Чужие сообщения - слева */}
                 {!isUser && (
-                    <View style={styles.avatar}>
-                        <Text style={styles.avatarText}>
-                            {item.userName ? item.userName.charAt(0).toUpperCase() : 'U'}
-                        </Text>
+                    <View style={styles.otherMessageContainer}>
+                        <View style={styles.avatar}>
+                            <Text style={styles.avatarText}>
+                                {item.userName ? item.userName.charAt(0).toUpperCase() : 'U'}
+                            </Text>
+                        </View>
+                        <View style={styles.otherBubble}>
+                            <Text style={styles.userNameText}>
+                                {item.userName || 'Аноним'}
+                            </Text>
+                            <Text style={styles.messageText}>
+                                {item.text}
+                            </Text>
+                            <Text style={styles.timestamp}>
+                                {formatTime(item.timestamp)}
+                            </Text>
+                        </View>
                     </View>
                 )}
 
-                {/* Баллон сообщения */}
-                <View style={[
-                    styles.messageBubble,
-                    isUser ? styles.userBubble : styles.otherBubble
-                ]}>
-                    {/* Имя пользователя для чужих сообщений */}
-                    {!isUser && (
-                        <Text style={styles.userNameText}>
-                            {item.userName || 'Аноним'}
-                        </Text>
-                    )}
-                    <Text style={styles.messageText}>
-                        {item.text}
-                    </Text>
-                    <Text style={styles.timestamp}>
-                        {formatTime(item.timestamp)}
-                    </Text>
-                </View>
-
-                {/* Аватар для своих сообщений (справа) */}
+                {/* Свои сообщения - справа */}
                 {isUser && (
-                    <View style={[styles.avatar, styles.userAvatar]}>
-                        <Text style={styles.avatarText}>Я</Text>
+                    <View style={styles.userMessageContainer}>
+                        <View style={styles.userBubble}>
+                            <Text style={styles.messageText}>
+                                {item.text}
+                            </Text>
+                            <Text style={styles.timestamp}>
+                                {formatTime(item.timestamp)}
+                            </Text>
+                        </View>
+                        <View style={[styles.avatar, styles.userAvatar]}>
+                            <Text style={styles.avatarText}>Я</Text>
+                        </View>
                     </View>
                 )}
             </View>
@@ -246,7 +267,7 @@ const App = () => {
                         {connectionStatus}
                     </Text>
                     <Text style={styles.serverInfo}>
-                        {currentUrl}
+                        {myUserId ? `ID: ${myUserId.substring(0, 8)}...` : currentUrl}
                     </Text>
                 </View>
                 <View style={styles.headerButtons}>
@@ -396,34 +417,40 @@ const styles = StyleSheet.create({
         paddingVertical: 16,
         flexGrow: 1,
     },
-    messageContainer: {
-        flexDirection: 'row',
-        alignItems: 'flex-end',
+    messageRow: {
         marginVertical: 4,
         paddingHorizontal: 8,
     },
-    userContainer: {
-        justifyContent: 'flex-end', // Свои сообщения справа
+    userMessageRow: {
+        justifyContent: 'flex-end',
     },
-    otherContainer: {
-        justifyContent: 'flex-start', // Чужие сообщения слева
+    // Контейнер для чужих сообщений (слева)
+    otherMessageContainer: {
+        flexDirection: 'row',
+        alignItems: 'flex-end',
+        justifyContent: 'flex-start',
+    },
+    // Контейнер для своих сообщений (справа)
+    userMessageContainer: {
+        flexDirection: 'row',
+        alignItems: 'flex-end',
+        justifyContent: 'flex-end',
     },
     messageBubble: {
         maxWidth: '75%',
         paddingHorizontal: 12,
         paddingVertical: 8,
         borderRadius: 18,
-        marginHorizontal: 4,
     },
     userBubble: {
         backgroundColor: '#2B5278', // Синий для своих сообщений
         borderBottomRightRadius: 4,
-        marginLeft: 'auto', // Толкает сообщение вправо
+        marginLeft: 8,
     },
     otherBubble: {
         backgroundColor: '#182533', // Темный для чужих сообщений
         borderBottomLeftRadius: 4,
-        marginRight: 'auto', // Толкает сообщение влево
+        marginRight: 8,
     },
     messageText: {
         color: 'white',
@@ -449,7 +476,6 @@ const styles = StyleSheet.create({
         backgroundColor: '#2F89FC',
         justifyContent: 'center',
         alignItems: 'center',
-        marginHorizontal: 4,
     },
     userAvatar: {
         backgroundColor: '#2B5278', // Темно-синий для своего аватара
