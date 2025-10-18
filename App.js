@@ -13,8 +13,8 @@ import {
 import io from 'socket.io-client';
 
 // 🔧 НАСТРОЙТЕ ЭТИ АДРЕСА!
-const EXTERNAL_IP = '46.0.64.231'; // Ваш внешний IP
-const INTERNAL_IP = '192.168.0.128';  // Ваш внутренний IP Ubuntu
+const EXTERNAL_IP = '77.222.52.61'; // Ваш внешний IP
+const INTERNAL_IP = '77.222.52.61';  // Ваш внутренний IP Ubuntu
 
 const SERVER_URLS = [
     `http://${EXTERNAL_IP}:3000`,  // Внешний доступ
