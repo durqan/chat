@@ -235,5 +235,147 @@ export const ChatStyles = {
         color: 'white',
         fontSize: 16,
         fontWeight: 'bold'
-    }
+    },
+    // Стили для комнат
+    roomListContainer: {
+        flex: 1,
+        backgroundColor: '#FFFFFF',
+        paddingHorizontal: 16,
+    },
+    roomListHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingVertical: 20,
+        borderBottomWidth: 1,
+        borderBottomColor: '#E8F5E8',
+    },
+    roomListTitle: {
+        fontSize: 24,
+        fontWeight: 'bold',
+        color: '#2E7D32',
+    },
+    createRoomButton: {
+        backgroundColor: '#2E7D32',
+        paddingHorizontal: 16,
+        paddingVertical: 10,
+        borderRadius: 20,
+    },
+    createRoomButtonText: {
+        color: 'white',
+        fontSize: 14,
+        fontWeight: 'bold',
+    },
+    roomList: {
+        flex: 1,
+    },
+    roomListContent: {
+        paddingVertical: 16,
+    },
+    roomItem: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        backgroundColor: '#F8F8F8',
+        padding: 16,
+        borderRadius: 12,
+        marginBottom: 12,
+        borderWidth: 1,
+        borderColor: '#E8F5E8',
+    },
+    roomItemActive: {
+        backgroundColor: '#E8F5E8',
+        borderColor: '#2E7D32',
+    },
+    roomInfo: {
+        flex: 1,
+    },
+    roomName: {
+        fontSize: 18,
+        fontWeight: 'bold',
+        color: '#2E7D32',
+        marginBottom: 4,
+    },
+    roomDetails: {
+        fontSize: 12,
+        color: '#666',
+    },
+    roomJoinButton: {
+        width: 36,
+        height: 36,
+        borderRadius: 18,
+        backgroundColor: '#2E7D32',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    roomJoinButtonText: {
+        color: 'white',
+        fontSize: 16,
+        fontWeight: 'bold',
+    },
+    emptyRooms: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        paddingVertical: 60,
+    },
+    emptyRoomsText: {
+        fontSize: 16,
+        color: '#666',
+        textAlign: 'center',
+    },
+
+// Модальное окно создания комнаты
+    modalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    modalContent: {
+        backgroundColor: 'white',
+        borderRadius: 16,
+        padding: 24,
+        margin: 20,
+        width: '90%',
+        maxWidth: 400,
+    },
+    modalTitle: {
+        fontSize: 20,
+        fontWeight: 'bold',
+        color: '#2E7D32',
+        marginBottom: 20,
+        textAlign: 'center',
+    },
+    modalInput: {
+        borderWidth: 1,
+        borderColor: '#DDD',
+        borderRadius: 8,
+        padding: 12,
+        marginBottom: 16,
+        fontSize: 16,
+    },
+    modalButtons: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        marginTop: 8,
+    },
+    modalButton: {
+        flex: 1,
+        paddingVertical: 12,
+        borderRadius: 8,
+        marginHorizontal: 6,
+    },
+    modalButtonCancel: {
+        backgroundColor: '#666',
+    },
+    modalButtonConfirm: {
+        backgroundColor: '#2E7D32',
+    },
+    modalButtonText: {
+        color: 'white',
+        textAlign: 'center',
+        fontWeight: 'bold',
+        fontSize: 16,
+    },
 };

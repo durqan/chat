@@ -12,7 +12,12 @@ export class MessageInput extends React.Component {
 
     handleSend = () => {
         const { inputText } = this.state;
-        const { onSend, isConnected } = this.props;
+        const { onSend, isConnected, currentRoom } = this.props;
+
+        if (!currentRoom) {
+            Alert.alert('Ошибка', 'Выберите комнату для отправки сообщений');
+            return;
+        }
 
         if (inputText.trim() && isConnected) {
             onSend(inputText.trim());
@@ -26,7 +31,13 @@ export class MessageInput extends React.Component {
 
     render() {
         const { inputText } = this.state;
-        const { isConnected } = this.props;
+        const { isConnected, currentRoom } = this.props;
+
+        const placeholder = !currentRoom
+            ? "Выберите комнату для чата..."
+            : isConnected
+                ? `Введите сообщение в ${currentRoom.name}...`
+                : "Ожидание подключения...";
 
         return (
             <View style={ChatStyles.inputContainer}>
@@ -34,27 +45,29 @@ export class MessageInput extends React.Component {
                     style={[
                         ChatStyles.textInput,
                         {
-                            borderColor: isConnected ? '#2E7D32' : '#CCC',
-                            color: isConnected ? '#333' : '#999',
+                            borderColor: isConnected && currentRoom ? '#2E7D32' : '#CCC',
+                            color: isConnected && currentRoom ? '#333' : '#999',
                         }
                     ]}
                     value={inputText}
                     onChangeText={this.handleTextChange}
-                    placeholder={isConnected ? "Введите сообщение..." : "Ожидание подключения..."}
+                    placeholder={placeholder}
                     placeholderTextColor="#999"
                     multiline
                     maxLength={500}
                     onSubmitEditing={this.handleSend}
                     returnKeyType="send"
-                    editable={isConnected}
+                    editable={isConnected && !!currentRoom}
                 />
                 <TouchableOpacity
                     style={[
                         ChatStyles.sendButton,
-                        { backgroundColor: isConnected ? '#2E7D32' : '#CCC' }
+                        {
+                            backgroundColor: isConnected && currentRoom ? '#2E7D32' : '#CCC'
+                        }
                     ]}
                     onPress={this.handleSend}
-                    disabled={!isConnected}
+                    disabled={!isConnected || !currentRoom}
                 >
                     <Text style={ChatStyles.sendButtonText}>➤</Text>
                 </TouchableOpacity>
